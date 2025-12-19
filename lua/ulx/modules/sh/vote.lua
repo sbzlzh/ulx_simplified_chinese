@@ -141,21 +141,11 @@ function ulx.vote(calling_ply, title, ...)
 end
 
 local vote = ulx.command(CATEGORY_NAME, "ulx vote", ulx.vote, "!vote")
-vote:addParam{
-    type = ULib.cmds.StringArg,
-    hint = "标题"
-}
-
-vote:addParam{
-    type = ULib.cmds.StringArg,
-    hint = "选项",
-    ULib.cmds.takeRestOfLine,
-    repeat_min = 2,
-    repeat_max = 10
-}
-
+vote:addParam{type = ULib.cmds.StringArg, hint = "标题"}
+vote:addParam{type = ULib.cmds.StringArg, hint = "选项", ULib.cmds.takeRestOfLine, repeat_min = 2, repeat_max = 10}
 vote:defaultAccess(ULib.ACCESS_ADMIN)
 vote:help("开始公众投票.")
+
 -- Stop a vote in progress
 function ulx.stopVote(calling_ply)
     if not ulx.voteInProgress then
@@ -246,19 +236,10 @@ function ulx.votemap2(calling_ply, ...)
 end
 
 local votemap2 = ulx.command(CATEGORY_NAME, "ulx votemap2", ulx.votemap2, "!votemap2")
-votemap2:addParam{
-    type = ULib.cmds.StringArg,
-    completes = ulx.maps,
-    hint = "map",
-    error = "指定的地图错误 \"%s\" ",
-    ULib.cmds.restrictToCompletes,
-    ULib.cmds.takeRestOfLine,
-    repeat_min = 1,
-    repeat_max = 10
-}
-
+votemap2:addParam{type = ULib.cmds.StringArg, completes = ulx.maps, hint = "map", error = "指定的地图错误 \"%s\" ", ULib.cmds.restrictToCompletes, ULib.cmds.takeRestOfLine, repeat_min = 1, repeat_max = 10}
 votemap2:defaultAccess(ULib.ACCESS_ADMIN)
 votemap2:help("开始一个地图更换投票.")
+
 if SERVER then -- The ratio needed for a votemap2 to succeed
     ulx.convar("votemap2Successratio", "0.5", _, ULib.ACCESS_ADMIN)
 end
@@ -340,20 +321,11 @@ function ulx.votekick(calling_ply, target_ply, reason)
 end
 
 local votekick = ulx.command(CATEGORY_NAME, "ulx votekick", ulx.votekick, "!votekick")
-votekick:addParam{
-    type = ULib.cmds.PlayerArg
-}
-
-votekick:addParam{
-    type = ULib.cmds.StringArg,
-    hint = "请输入原因或者选择原因",
-    ULib.cmds.optional,
-    ULib.cmds.takeRestOfLine,
-    completes = ulx.common_kick_reasons
-}
-
+votekick:addParam{type = ULib.cmds.PlayerArg}
+votekick:addParam{type = ULib.cmds.StringArg, hint = "请输入原因或者选择原因", ULib.cmds.optional, ULib.cmds.takeRestOfLine, completes = ulx.common_kick_reasons}
 votekick:defaultAccess(ULib.ACCESS_ADMIN)
 votekick:help("开始一个踢出玩家投票.")
+
 if SERVER then -- The ratio needed for a votekick to succeed
     ulx.convar("votekickSuccessratio", "0.6", _, ULib.ACCESS_ADMIN)
 end
@@ -428,29 +400,13 @@ function ulx.voteban(calling_ply, target_ply, minutes, reason)
 end
 
 local voteban = ulx.command(CATEGORY_NAME, "ulx voteban", ulx.voteban, "!voteban")
-voteban:addParam{
-    type = ULib.cmds.PlayerArg
-}
+voteban:addParam{type = ULib.cmds.PlayerArg}
 
-voteban:addParam{
-    type = ULib.cmds.NumArg,
-    min = 0,
-    default = 1440,
-    hint = "时长,单位为分",
-    ULib.cmds.allowTimeString,
-    ULib.cmds.optional
-}
-
-voteban:addParam{
-    type = ULib.cmds.StringArg,
-    hint = "请输入原因或者选择原因",
-    ULib.cmds.optional,
-    ULib.cmds.takeRestOfLine,
-    completes = ulx.common_kick_reasons
-}
-
+voteban:addParam{type = ULib.cmds.NumArg, min = 0, default = 1440, hint = "时长,单位为分", ULib.cmds.allowTimeString, ULib.cmds.optional}
+voteban:addParam{type = ULib.cmds.StringArg, hint = "请输入原因或者选择原因", ULib.cmds.optional, ULib.cmds.takeRestOfLine, completes = ulx.common_kick_reasons}
 voteban:defaultAccess(ULib.ACCESS_ADMIN)
 voteban:help("投票封禁目标玩家.")
+
 if SERVER then -- The ratio needed for a voteban to succeed
     ulx.convar("votebanSuccessratio", "0.7", _, ULib.ACCESS_ADMIN)
 end
@@ -461,20 +417,15 @@ end
 
 -- Our regular votemap command
 local votemap = ulx.command(CATEGORY_NAME, "ulx votemap", ulx.votemap, "!votemap")
-votemap:addParam{
-    type = ULib.cmds.StringArg,
-    completes = ulx.votemaps,
-    hint = "map",
-    ULib.cmds.takeRestOfLine,
-    ULib.cmds.optional
-}
-
+votemap:addParam{ type = ULib.cmds.StringArg, completes = ulx.votemaps, hint = "map", ULib.cmds.takeRestOfLine, ULib.cmds.optional}
 votemap:defaultAccess(ULib.ACCESS_ALL)
 votemap:help("投票更换地图(无GUI投票).")
+
 -- Our veto command
 local veto = ulx.command(CATEGORY_NAME, "ulx veto", ulx.votemapVeto, "!veto")
 veto:defaultAccess(ULib.ACCESS_ADMIN)
 veto:help("否决一个成功的更换地图投票.")
+
 local function voteGagDone2(t, target, time, ply)
     local shouldGag = false
     if t.results[1] and t.results[1] > 0 then
@@ -533,30 +484,12 @@ function ulx.votegag(calling_ply, target_ply, minutes)
 end
 
 local votegag = ulx.command(CATEGORY_NAME, "ulx votegag", ulx.votegag, "!votegag")
-votegag:addParam{
-    type = ULib.cmds.PlayerArg
-}
-
-votegag:addParam{
-    type = ULib.cmds.NumArg,
-    min = 0,
-    max = 9999,
-    default = 10,
-    hint = "时长,单位为分",
-    ULib.cmds.allowTimeString,
-    ULib.cmds.optional
-}
-
-votegag:addParam{
-    type = ULib.cmds.StringArg,
-    hint = "请输入原因或者选择原因",
-    ULib.cmds.optional,
-    ULib.cmds.takeRestOfLine,
-    completes = ulx.common_kick_reasons
-}
-
+votegag:addParam{ type = ULib.cmds.PlayerArg}
+votegag:addParam{ type = ULib.cmds.NumArg, min = 0, max = 9999, default = 10, hint = "时长,单位为分", ULib.cmds.allowTimeString, ULib.cmds.optional}
+votegag:addParam{ type = ULib.cmds.StringArg, hint = "请输入原因或者选择原因", ULib.cmds.optional, ULib.cmds.takeRestOfLine, completes = ulx.common_kick_reasons}
 votegag:defaultAccess(ULib.ACCESS_ALL)
 votegag:help("开始反对目标的公众投票.")
+
 timer.Create("ulx_votingTimer", 60, 0, function()
     for _, v in ipairs(player.GetHumans()) do
         local g = v:GetPData("votegagged")
@@ -595,12 +528,10 @@ function ulx.unvotegag(calling_ply, target_plys)
 end
 
 local unvotegag = ulx.command(CATEGORY_NAME, "ulx unvotegag", ulx.unvotegag, "!unvotegag")
-unvotegag:addParam{
-    type = ULib.cmds.PlayersArg
-}
-
+unvotegag:addParam{type = ULib.cmds.PlayersArg}
 unvotegag:defaultAccess(ULib.ACCESS_ADMIN)
 unvotegag:help("取消玩家堵嘴")
+
 hook.Add("PlayerCanHearPlayersVoice", "ulx_VoteGagged", function(listener, talker)
     local g = talker.cc_voting_votegagged
     if g and (g ~= (0 or "0")) then return false end
@@ -662,29 +593,13 @@ function ulx.votemute(calling_ply, target_ply, minutes)
 end
 
 local votemute = ulx.command(CATEGORY_NAME, "ulx votemute", ulx.votemute, "!votemute")
-votemute:addParam{
-    type = ULib.cmds.PlayerArg
-}
+votemute:addParam{type = ULib.cmds.PlayerArg}
 
-votemute:addParam{
-    type = ULib.cmds.NumArg,
-    min = 0,
-    default = 1440,
-    hint = "时长,单位为分",
-    ULib.cmds.allowTimeString,
-    ULib.cmds.optional
-}
-
-votemute:addParam{
-    type = ULib.cmds.StringArg,
-    hint = "请输入原因或者选择原因",
-    ULib.cmds.optional,
-    ULib.cmds.takeRestOfLine,
-    completes = ulx.common_kick_reasons
-}
-
+votemute:addParam{ type = ULib.cmds.NumArg, min = 0, default = 1440, hint = "时长,单位为分", ULib.cmds.allowTimeString, ULib.cmds.optional}
+votemute:addParam{ type = ULib.cmds.StringArg, hint = "请输入原因或者选择原因", ULib.cmds.optional, ULib.cmds.takeRestOfLine, completes = ulx.common_kick_reasons}
 votemute:defaultAccess(ULib.ACCESS_ALL)
 votemute:help("开始对目标静音的公众投票.")
+
 function ulx.unvotemute(calling_ply, target_plys)
     for _, v in ipairs(target_plys) do
         if v:GetPData("votemuted") and v:GetPData("votemuted") ~= (0 or "0") then
@@ -697,10 +612,8 @@ function ulx.unvotemute(calling_ply, target_plys)
 end
 
 local unvotemute = ulx.command(CATEGORY_NAME, "ulx unvotemute", ulx.unvotemute, "!unvotemute")
-unvotemute:addParam{
-    type = ULib.cmds.PlayersArg
-}
-
+unvotemute:addParam{type = ULib.cmds.PlayersArg}
 unvotemute:defaultAccess(ULib.ACCESS_ADMIN)
 unvotemute:help("取消玩家静音")
+
 hook.Add("PlayerSay", "ulx_VoteMuted", function(ply) if ply:GetPData("votemtued") and (ply:GetPData("votemuted") ~= (0 or "0")) then return "" end end)

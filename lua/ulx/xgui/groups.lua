@@ -878,7 +878,7 @@ function groups.populateRestrictionArgs(cmd, accessStr)
         groups.rArgList:Add(groups.applyInheritedButton)
     end
     groups.rArgList:SetSkin(xgui.settings.skin) -- For some reason, skin doesn't update properly when this panel is recreated
-    groups.rArgList:SetSkin("")                 -- Set the skin back to "" so that future skin changes in client settings will apply
+    groups.rArgList:SetSkin("") -- Set the skin back to "" so that future skin changes in client settings will apply
 end
 
 function groups.generateAccessString()
@@ -987,7 +987,7 @@ function groups.removePlayerLine(ID)
     end
 end
 
-function groups.playerUpdate(data)  --Call when a user has been moved to a different group
+function groups.playerUpdate(data) --Call when a user has been moved to a different group
     for ID, pdata in pairs(data) do
         groups.removePlayerLine(ID) --Remove the line, if it exists
     end

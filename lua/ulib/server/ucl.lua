@@ -46,6 +46,8 @@
 
 local ucl = ULib.ucl -- Make it easier for us to refer to
 
+local backups_to_keep = 30
+
 local defaultGroupsText = -- To populate initially or when the user deletes it
 [["operator"
 {
@@ -110,12 +112,60 @@ function ucl.saveGroups()
 end
 
 function ucl.saveUsers()
-	for _, userInfo in pairs( ucl.users ) do
-		table.sort( userInfo.allow )
-		table.sort( userInfo.deny )
+	for steamid, userInfo in pairs( ucl.users ) do
+		ucl.saveUser(steamid, userInfo)
+	end
+end
+
+local isFirstTimeDBSetup = false
+local function generateUserDB()
+	if not sql.TableExists("ulib_users") then
+		sql.Query([[
+			CREATE TABLE IF NOT EXISTS ulib_users (
+				steamid TEXT NOT NULL PRIMARY KEY,
+				name TEXT NULL,
+				usergroup TEXT NOT NULL DEFAULT "user",
+				allow TEXT,
+				deny TEXT
+			);
+		]])
+		isFirstTimeDBSetup = true
+	end
+end
+generateUserDB()
+
+local function escape(str)
+	return sql.SQLStr(str, true)
+end
+
+function ucl.saveUser( steamid, userInfo )
+	if not userInfo then
+		userInfo = ucl.users[ steamid ]
 	end
 
-	ULib.fileWrite( ULib.UCL_USERS, ULib.makeKeyValues( ucl.users ) )
+	table.sort( userInfo.allow )
+	table.sort( userInfo.deny )
+	local allow, deny = util.TableToJSON( userInfo.allow ), util.TableToJSON( userInfo.deny )
+
+	sql.Query(string.format([[
+		REPLACE INTO ulib_users
+			(steamid, name, usergroup, allow, deny)
+		VALUES
+			('%s', '%s', '%s', '%s', '%s');
+	]], escape( steamid ), escape( userInfo.name or "" ), escape( userInfo.group ), escape( allow ), escape( deny )))
+end
+
+function ucl.deleteUser( steamid )
+	sql.Query(string.format([[
+		DELETE FROM
+			ulib_users
+		WHERE
+			steamid = '%s'
+	]], escape( steamid )))
+end
+
+function ucl.deleteUsers()
+	sql.Query([[DELETE FROM ulib_users;]])
 end
 
 local function reloadGroups()
@@ -212,24 +262,62 @@ local function reloadGroups()
 end
 reloadGroups()
 
-local function reloadUsers()
-	-- Try to read from the safest locations first
-	local noMount = true
-	local path = ULib.UCL_USERS
-	if not ULib.fileExists( path, noMount ) then
-		ULib.fileWrite( path, "" )
+local function loadUsersFromDB()
+	-- No cap, the sqlite errors should always be reset when making a new query.
+	sql.m_strError = nil
+	local users = sql.Query( "SELECT * FROM ulib_users;" )
+	if not users then
+		local err = sql.LastError()
+		if err then
+			Msg( "The users database failed to load.\n" )
+			Msg( "Error while querying database was: " .. err .. "\n" )
+			return false
+		else
+			return {}
+		end
 	end
 
+	local out = {}
+	for _, row in ipairs(users) do
+		out[row.steamid] = {name = row.name, group = row.usergroup, allow = util.JSONToTable(row.allow) or {}, deny = util.JSONToTable(row.deny) or {}}
+	end
+
+	return out
+end
+
+local function reloadUsers()
+	local runningFromDB = false
 	local needsBackup = false
 	local err
-	ucl.users, err = ULib.parseKeyValues( ULib.removeCommentHeader( ULib.fileRead( path, true ) or "", "/" ) )
+
+	-- Start by trying to read from the DB.
+	if not isFirstTimeDBSetup then
+		ucl.users = loadUsersFromDB()
+		if ucl.users then
+			runningFromDB = true
+		end
+	end
+
+	-- Next, read from the users file.
+	if not runningFromDB then
+		local noMount = true
+		local path = ULib.UCL_USERS
+
+		if not ULib.fileExists( path, noMount ) then
+			ULib.fileWrite( path, "" )
+		end
+
+		ucl.users, err = ULib.parseKeyValues( ULib.removeCommentHeader( ULib.fileRead( path, noMount ) or "", "/" ) )
+	end
 
 	-- Check to make sure it passes a basic validity test
 	if not ucl.users then
 		needsBackup = true
 		-- Totally messed up! Clear it.
 		ucl.users = {}
-
+		if runningFromDB then
+			ucl.deleteUsers()
+		end
 	else
 		for id, userInfo in pairs( ucl.users ) do
 			if type( id ) ~= "string" then
@@ -288,15 +376,345 @@ local function reloadUsers()
 	end
 
 	if needsBackup then
-		Msg( "Users file was not formatted correctly. Attempting to fix and backing up original\n" )
-		if err then
-			Msg( "Error while reading users file was: " .. err .. "\n" )
+		if runningFromDB then
+			Msg( "There was bad data returned from the database. Attempting to fix, though some data may be lost.\n" )
+			ucl.deleteUsers()
+		else
+			Msg( "Users file was not formatted correctly. Attempting to fix and backing up original\n" )
+			if err then
+				Msg( "Error while reading users file was: " .. err .. "\n" )
+			end
+			Msg( "Original file was backed up to " .. ULib.backupFile( ULib.UCL_USERS ) .. "\n" )
 		end
-		Msg( "Original file was backed up to " .. ULib.backupFile( ULib.UCL_USERS ) .. "\n" )
+		ucl.saveUsers()
+	elseif isFirstTimeDBSetup then
+		isFirstTimeDBSetup = false
+		Msg( "Migrating users file to users database.\n" )
 		ucl.saveUsers()
 	end
 end
 reloadUsers()
+
+-- === UCL users backup (startup + on-demand, debug) ===
+-- Writes to data/ulib_backups/users_YYYYMMDD_HHMMSS.txt
+-- Keeps the newest 10 backups.
+
+if SERVER then
+	_G.__UCL_USERS_BACKUP_DONE = _G.__UCL_USERS_BACKUP_DONE or false
+
+	local function log(msg) MsgN("[ULib UCL] " .. msg) end
+
+	local function serializeUsers(tbl)
+		-- Prefer ULib's KeyValues for human-readable snapshots,
+		-- but fall back to JSON if anything goes weird.
+		local ok, out = pcall(function() return ULib.makeKeyValues(tbl or {}) end)
+		if ok and type(out) == "string" and #out > 0 then return out end
+		log("KeyValues serialization failed, falling back to JSON.")
+		return util.TableToJSON(tbl or {}, true) or "{}"
+	end
+
+	local function doBackup()
+		log("Starting users backup…")
+
+		-- Ensure directory exists in DATA
+		local dir = "ulib_backups"
+		if not file.IsDir(dir, "DATA") then
+			log("Creating data/" .. dir .. " …")
+			file.CreateDir(dir)
+		end
+
+		-- Prepare content
+		if type(ucl.users) ~= "table" then
+			log("Warning: ucl.users is not a table; writing empty snapshot.")
+		end
+		local snapshot = serializeUsers(ucl.users)
+
+		-- Timestamped filename (UTC to keep names sortable + stable)
+		local stamp = os.date("!%Y%m%d_%H%M%S")
+		local rel   = string.format("%s/users_%s.txt", dir, stamp)
+
+		-- Write file (with error guard)
+		local ok, err = pcall(function() file.Write(rel, snapshot) end)
+		if not ok then
+			log("ERROR: file.Write failed: " .. tostring(err))
+			return
+		end
+
+		log("Backup written: data/" .. rel)
+
+		-- Prune old backups, keep newest
+		local files = file.Find(dir .. "/users_*.txt", "DATA") or {}
+		table.sort(files, function(a, b)
+			local ta = file.Time(dir .. "/" .. a, "DATA") or 0
+			local tb = file.Time(dir .. "/" .. b, "DATA") or 0
+			if ta ~= tb then return ta > tb end
+			return a > b
+		end)
+
+		for i = backups_to_keep + 1, #files do
+			file.Delete(dir .. "/" .. files[i])
+		end
+		if #files > backups_to_keep then
+			log("Pruned " .. tostring(#files - backups_to_keep) .. " old backup(s).")
+		end
+	end
+
+	local function backupUsersOnce(force)
+		if force then
+			log("Force flag detected; bypassing once-per-boot guard.")
+			doBackup()
+			return
+		end
+		if _G.__UCL_USERS_BACKUP_DONE then
+			log("Skipping: backup already performed this boot. Use 'ucl_backup_users force' to override.")
+			return
+		end
+		_G.__UCL_USERS_BACKUP_DONE = true
+		doBackup()
+	end
+
+	-- Run once on startup/file load
+	backupUsersOnce(false)
+
+	-- Server console OR listen-server host only
+	concommand.Add("ucl_backup_users", function(ply, cmd, args, argStr)
+		-- Dedicated server console: ply == nil
+		-- Listen server host: valid ply, ply:IsListenServerHost() == true
+		if IsValid(ply) and not ply:IsListenServerHost() then
+			ply:PrintMessage(HUD_PRINTCONSOLE, "[ULib UCL] This command can only be run by the SERVER CONSOLE or the LISTEN SERVER HOST.\n")
+			log(("Denied non-host player '%s' from running %s"):format(ply:Nick(), cmd))
+			return
+		end
+
+		local a = (args[1] or ""):lower()
+		local force = (a == "force" or a == "1" or a == "true" or a == "yes")
+
+		log(("Command received from %s; force=%s"):format(IsValid(ply) and "listen-server host" or "server console", tostring(force)))
+		backupUsersOnce(force)
+	end, nil, "Back up UCL users to data/ulib_backups (server console or listen server host only).")
+end
+
+-- === UCL users restore (from data/ulib_backups) ===
+-- Usage:
+--   ucl_restore_users latest
+--   ucl_restore_users users_YYYYMMDD_HHMMSS.txt
+-- Notes:
+--   - Overwrites in-memory ULib.ucl.users
+--   - Clears DB rows, then saves backup to DB via ucl.saveUsers()
+--   - Re-probes connected players for correct live permissions
+
+if SERVER then
+	-- Reuse the same dir as the backup block
+	local UCL_BACKUP_DIR = "ulib_backups"
+
+	-- If the earlier block defined a log() helper, reuse it; otherwise define a minimal one
+	local function _default_log(msg) MsgN("[ULib UCL] " .. msg) end
+	local log = rawget(_G, "__UCL_USERS_LOG") or _default_log
+
+	-- Helper: list backups newest-first
+	local function listBackupsSorted()
+		local files = file.Find(UCL_BACKUP_DIR .. "/users_*.txt", "DATA") or {}
+		table.sort(files, function(a, b)
+			local ta = file.Time(UCL_BACKUP_DIR .. "/" .. a, "DATA") or 0
+			local tb = file.Time(UCL_BACKUP_DIR .. "/" .. b, "DATA") or 0
+			if ta ~= tb then return ta > tb end
+			return a > b
+		end)
+		return files
+	end
+
+	-- Helper: parse a backup file (KeyValues first, JSON fallback)
+	local function parseBackup(relpath)
+		local full = relpath
+		local contents = file.Read(full, "DATA")
+		if not contents or contents == "" then
+			return nil, "file empty or unreadable"
+		end
+
+		-- Try KeyValues (what ULib.makeKeyValues wrote)
+		do
+			local ok, tbl = pcall(function()
+				-- Backups have no comment header, but remove anyway (safe)
+				return ULib.parseKeyValues(ULib.removeCommentHeader(contents, "/"))
+			end)
+			if ok and type(tbl) == "table" then
+				return tbl
+			end
+		end
+
+		-- Fallback: JSON (what we write if KV failed on backup)
+		do
+			local ok, tbl = pcall(function()
+				return util.JSONToTable(contents)
+			end)
+			if ok and type(tbl) == "table" then
+				return tbl
+			end
+		end
+
+		return nil, "unrecognized format (neither KeyValues nor JSON)"
+	end
+
+	-- Helper: very light validation/sanitization
+	local function sanitizeUsersTable(t)
+		if type(t) ~= "table" then return {} end
+		for id, info in pairs(t) do
+			if type(id) ~= "string" or type(info) ~= "table" then
+				t[id] = nil
+			else
+				if type(info.allow) ~= "table" then info.allow = {} end
+				if type(info.deny)  ~= "table" then info.deny  = {} end
+				if info.group ~= nil and type(info.group) ~= "string" then info.group = nil end
+				if info.name  ~= nil and type(info.name)  ~= "string" then info.name  = nil end
+				-- canonicalize case on allow/deny
+				for k, v in pairs(info.allow) do
+					if type(v) == "string" then info.allow[k] = v:lower() end
+				end
+				for k, v in pairs(info.deny) do
+					if type(v) == "string" then info.deny[k] = v:lower() end
+				end
+			end
+		end
+		return t
+	end
+
+	-- Restore procedure
+	local function restoreFromBackup(filename)
+		if not file.IsDir(UCL_BACKUP_DIR, "DATA") then
+			return false, "backup directory does not exist"
+		end
+
+		local targetRel
+		if not filename or filename == "" or filename == "latest" then
+			local ordered = listBackupsSorted()
+			if #ordered == 0 then
+				return false, "no backups found"
+			end
+			targetRel = UCL_BACKUP_DIR .. "/" .. ordered[1]
+		else
+			-- sanitize slashes; only allow files under our dir
+			filename = filename:gsub("\\", "/")
+			if not filename:find("^users_%d+_%d+%.txt$") then
+				-- allow either "users_YYYYMMDD_HHMMSS.txt" or full relative with dir
+				filename = filename:match("users_%d+_%d+%.txt") or filename
+			end
+			targetRel = UCL_BACKUP_DIR .. "/" .. filename
+			if not file.Exists(targetRel, "DATA") then
+				return false, ("backup file not found: %s"):format(filename)
+			end
+		end
+
+		log("Restoring users from data/" .. targetRel .. " …")
+
+		-- Load + parse
+		local tbl, perr = parseBackup(targetRel)
+		if not tbl then
+			return false, "parse failed: " .. tostring(perr)
+		end
+		tbl = sanitizeUsersTable(tbl)
+
+		-- Overwrite in-memory users table
+		ULib.ucl.users = tbl
+		ucl.users = tbl -- alias in this file’s scope
+
+		-- Reset DB and save fresh snapshot
+		if ucl.deleteUsers then
+			ucl.deleteUsers()
+		end
+
+		-- saveUsers() sorts allow lists and writes DB rows via ucl.saveUser()
+		ucl.saveUsers()
+
+		-- Re-probe connected players so live permissions update immediately
+		for _, ply in ipairs(player.GetAll()) do
+			if IsValid(ply) then
+				ucl.probe(ply)
+			end
+		end
+
+		log("Restore complete. Users table loaded and database updated.")
+		return true
+	end
+
+	-- Console command: server console OR listen-server host only
+	--   ucl_restore_users latest
+	--   ucl_restore_users users_YYYYMMDD_HHMMSS.txt
+	concommand.Add("ucl_restore_users", function(ply, cmd, args, argStr)
+		-- Dedicated server: ply == nil
+		-- Listen host: valid ply AND ply:IsListenServerHost()
+		if IsValid(ply) and not ply:IsListenServerHost() then
+			ply:PrintMessage(HUD_PRINTCONSOLE, "[ULib UCL] This command can only be run by the SERVER CONSOLE or the LISTEN SERVER HOST.\n")
+			log(("Denied non-host player '%s' from running %s"):format(ply:Nick(), cmd))
+			return
+		end
+
+		local which = args[1] or "latest"
+		log(("Restore command from %s; target=%s"):format(IsValid(ply) and "listen-server host" or "server console", which))
+
+		local ok, err = restoreFromBackup(which)
+		if not ok then
+			log("RESTORE ERROR: " .. tostring(err))
+			if IsValid(ply) then
+				ply:PrintMessage(HUD_PRINTCONSOLE, "[ULib UCL] Restore failed: " .. tostring(err) .. "\n")
+			end
+			return
+		end
+
+		if IsValid(ply) then
+			ply:PrintMessage(HUD_PRINTCONSOLE, "[ULib UCL] Restore complete.\n")
+		end
+	end, nil, "Restore UCL users from a backup file (server console or listen server host only).")
+end
+
+-- === Drop UCL users database table (with confirmation) ===
+-- Usage: ucl_drop_users_db CONFIRM
+-- Effect: Drops the SQLite table `ulib_users`
+--         On next reload, it will be re-imported from users.txt
+-- Security: Only dedicated server console or listen-server host may run this
+
+if SERVER then
+	local function dropUsersTable()
+		MsgN("[ULib UCL] Dropping ulib_users table …")
+		local ok, err = pcall(function()
+			sql.Query("DROP TABLE IF EXISTS ulib_users;")
+		end)
+		if not ok then
+			MsgN("[ULib UCL] ERROR while dropping users table: " .. tostring(err))
+			return false
+		end
+		MsgN("[ULib UCL] ulib_users table dropped successfully.")
+		return true
+	end
+
+	concommand.Add("ucl_drop_users_db", function(ply, cmd, args, argStr)
+		-- Dedicated server console: ply == nil
+		-- Listen server host: valid ply and ply:IsListenServerHost()
+		if IsValid(ply) and not ply:IsListenServerHost() then
+			ply:PrintMessage(HUD_PRINTCONSOLE,
+				"[ULib UCL] This command can only be run by the SERVER CONSOLE or the LISTEN SERVER HOST.\n")
+			MsgN("[ULib UCL] Denied non-host player '" .. ply:Nick() .. "' from running " .. cmd)
+			return
+		end
+
+		-- Require explicit CONFIRM
+		if (args[1] or ""):upper() ~= "CONFIRM" then
+			MsgN("[ULib UCL] Refusing to drop table. You must run: ucl_drop_users_db CONFIRM")
+			if IsValid(ply) then
+				ply:PrintMessage(HUD_PRINTCONSOLE,
+					"[ULib UCL] Refusing to drop table. You must run: ucl_drop_users_db CONFIRM\n")
+			end
+			return
+		end
+
+		local ok = dropUsersTable()
+		if ok and IsValid(ply) then
+			ply:PrintMessage(HUD_PRINTCONSOLE,
+				"[ULib UCL] ulib_users table dropped. Restart or reload to re-import from legacy users.txt\n")
+		end
+	end, nil, "Drop the ulib_users table (requires CONFIRM).")
+end
+
+
 
 
 --[[
@@ -723,7 +1141,7 @@ function ucl.addUser( id, allows, denies, group, from_CAMI )
 	if denies == ULib.DEFAULT_GRANT_ACCESS.deny then denies = table.Copy( denies ) end -- Otherwise we'd be changing all guest access
 	if group and not ucl.groups[ group ] then return error( "Group does not exist for adding user to (" .. group .. ")", 2 ) end
 
-	-- Lower case'ify
+	-- This doesn't do anything?
 	for k, v in ipairs( allows ) do allows[ k ] = v end
 	for k, v in ipairs( denies ) do denies[ k ] = v end
 
@@ -732,7 +1150,7 @@ function ucl.addUser( id, allows, denies, group, from_CAMI )
 	if ucl.users[ id ] and ucl.users[ id ].group then oldgroup = ucl.users[ id ].group end
 	ucl.users[ id ] = { allow=allows, deny=denies, group=group, name=name }
 
-	ucl.saveUsers()
+	ucl.saveUser( id, ucl.users[ id ] )
 
 	local ply = ULib.getPlyByID( id )
 	if ply then
@@ -864,7 +1282,26 @@ function ucl.userAllow( id, access, revoke, deny )
 			ULib.queueFunctionCall( hook.Call, ULib.HOOK_UCLAUTH, _, ply ) -- Inform the masses
 		end
 
-		ucl.saveUsers()
+		local saveId
+		if ucl.users[ id ] then
+			saveId = id
+		else
+			local data = ucl.authed[ uid ]
+			for checkId, check in pairs( ucl.users ) do
+				if check == data then
+					saveId = checkId
+					break
+				end
+			end
+		end
+
+		if saveId then
+			ucl.saveUser( id, ucl.users[ id ] )
+		else
+			Msg( "There was an error while changing user access.\n" )
+			Msg( "The user ID could not be found, so the user could not be saved\n" )
+		end
+
 
 		hook.Call( ULib.HOOK_USER_ACCESS_CHANGE, _, id, access, revoke, deny )
 		hook.Call( ULib.HOOK_UCLCHANGED )
@@ -908,18 +1345,18 @@ function ucl.removeUser( id, from_CAMI )
 
 		for _, index in ipairs( checkIndexes ) do
 			if ucl.users[ index ] then
-				changed = true
+				changed = index
 				ucl.users[ index ] = nil
 				break -- Only match the first one
 			end
 		end
 	else
-		changed = true
+		changed = id
 		ucl.users[ id ] = nil
 	end
 
 	if changed then -- If the user is only added to the default garry file, then nothing changed
-		ucl.saveUsers()
+		ucl.deleteUser( changed )
 		hook.Call( ULib.HOOK_USER_REMOVED, _, id, userInfo )
 	end
 
@@ -1031,7 +1468,9 @@ function ucl.probe( ply )
 
 			-- Update their name
 			ucl.authed[ uid ].name = ply:Nick()
-			ucl.saveUsers()
+
+			local sid = ply:SteamID()
+			ucl.saveUser( sid )
 
 			match = true
 			break

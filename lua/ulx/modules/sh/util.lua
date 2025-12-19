@@ -282,11 +282,39 @@ function ulx.noclip(calling_ply, target_plys)
             if v:GetMoveType() == MOVETYPE_WALK then
                 v:SetMoveType(MOVETYPE_NOCLIP)
                 table.insert(affected_plys, v)
+                v.Was_GodEnabled = v:HasGodMode()
+                v:GodEnable()
+                v:SetNoDraw(true)
+                v:SetNoTarget(true)
+                v:SetNoCollideWithTeammates(true)
+
+                local steamid64 = v:SteamID64()
+
+                timer.Create("AdminObserver_" .. steamid64, 1, 0, function()
+                    if not IsValid(v) then
+                        timer.Remove("AdminObserver_" .. steamid64)
+                        return
+                    end
+
+                    if v:GetMoveType() ~= MOVETYPE_NOCLIP then
+                        timer.Remove("AdminObserver_" .. steamid64)
+                        return
+                    end
+                end)
             elseif v:GetMoveType() == MOVETYPE_NOCLIP then
                 v:SetMoveType(MOVETYPE_WALK)
                 table.insert(affected_plys, v)
-            else -- Ignore if they're an observer
-                ULib.tsayError(calling_ply, v:Nick() .. " 现在不能启用穿墙模式.", true)
+                if not v.Was_GodEnabled then
+                    v:GodDisable()
+                end
+                v.Was_GodEnabled = nil
+                v:SetNoDraw(false)
+                v:SetNoCollideWithTeammates(false)
+                v:SetNoTarget(false)
+                local steamid64 = v:SteamID64()
+                timer.Remove("AdminObserver_" .. steamid64)
+            else
+                ULib.tsayError(calling_ply, v:Nick() .. " 目前不能使用穿墙模式。", true)
             end
         end
     end

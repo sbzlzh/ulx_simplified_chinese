@@ -58,7 +58,9 @@ if CLIENT then
     function applyHaloEffect(playerMap)
         hook.Add("PreDrawHalos", "AddNewSpecialHalos", function()
             local alivePlayers = {}
+            local entitiesInRange = {}
             local localPlayer = LocalPlayer()
+            local playerPos = localPlayer:GetPos()
 
             for userID, ply in pairs(playerMap) do
                 if ply:IsValid() and ply:Alive() and ply ~= localPlayer then
@@ -66,7 +68,14 @@ if CLIENT then
                 end
             end
 
+            for _, ent in ipairs(ents.GetAll()) do
+                if ent:IsValid() and ent ~= localPlayer and ent:GetOwner() ~= localPlayer and ent:GetPos():DistToSqr(playerPos) <= 800 * 800 then
+                    table.insert(entitiesInRange, ent)
+                end
+            end
+
             halo.Add(alivePlayers, Color(255, 50, 50), 0, 0, 3, true, true)
+            halo.Add(entitiesInRange, Color(50, 50, 255), 0, 0, 3, true, true)
         end)
     end
 
@@ -120,15 +129,18 @@ if CLIENT then
         hook.Add("HUDPaint", "DrawEntityInfo", function()
             if GetConVar("hacker_show_ent_names"):GetInt() == 0 then return end
 
+            local localPlayer = LocalPlayer()
+            local playerPos = localPlayer:GetPos()
+
             for _, ent in ipairs(ents.GetAll()) do
-                if ent:GetClass() == "prop_physics" then
-                    local pos = ent:GetPos() + Vector(0, 0, 10)
-                    pos = pos:ToScreen()
+                if ent:GetClass() ~= "prop_physics" and ent ~= localPlayer and ent:GetPos():DistToSqr(playerPos) <= 800 * 800 then
+                    --local pos = ent:GetPos() + Vector(0, 0, 10)
+                    --pos = pos:ToScreen()
 
                     --draw.SimpleText(ent:GetClass(), "PlayerName", pos.x, pos.y, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
 
-                    local posText = "Pos: " .. tostring(math.Round(ent:GetPos().x)) .. ", " .. tostring(math.Round(ent:GetPos().y)) .. ", " .. tostring(math.Round(ent:GetPos().z))
-                    draw.SimpleText(posText, "PlayerName", pos.x, pos.y + 20, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
+                    --local posText = "Pos: " .. tostring(math.Round(ent:GetPos().x)) .. ", " .. tostring(math.Round(ent:GetPos().y)) .. ", " .. tostring(math.Round(ent:GetPos().z))
+                    --draw.SimpleText(posText, "PlayerName", pos.x, pos.y + 20, color_white, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER)
                 end
             end
         end)
